@@ -117,7 +117,6 @@ classdef NARMAXmodel
             Max_step = obj.maxStep;                       % Maximum Prediction Horizon
             Intial_Training = obj.initialTraining;
             counter = Intial_Training;
-            reset = true;
             
             Current_Horizon_Step = [];
             Modified_Training_Iterations = [];
@@ -152,7 +151,7 @@ classdef NARMAXmodel
                             Mu_Max = 1;
                         end
 
-                        if  Horizon_Step >= Prediction_Horizon && ~reset
+                        if  Horizon_Step >= Prediction_Horizon
                             if obj.writeToConsole
                                 disp('End of Training -----> Full Prediction Horizon Reached');
                             end
@@ -274,7 +273,7 @@ classdef NARMAXmodel
 
         function [y_est, y] = Sim(obj, u_pre, y_pre, fill)
            
-            if nargin < 3
+            if nargin < 4
                 fill = 2;
             end
             

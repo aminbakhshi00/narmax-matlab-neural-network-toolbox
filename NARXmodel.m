@@ -164,8 +164,8 @@ classdef NARXmodel
                                                                                    iter1, iter2);
 
                         if obj.writeToSave                             
-                            narmax = obj.narmax;
-                            save( sprintf('Net_Close_%s', num2str(Horizon_Step)) , 'narmax' , 'tr')
+                            narx = obj.narx;
+                            save( sprintf('Net_Close_%s', num2str(Horizon_Step)) , 'narx' , 'tr')
                         end   
                         
                         if obj.writeToConsole
@@ -249,7 +249,7 @@ classdef NARXmodel
 
         function [y_est, y] = Sim(obj, u_pre, y_pre, fill)
            
-            if nargin < 3
+            if nargin < 4
                 fill = 2;
             end
             
