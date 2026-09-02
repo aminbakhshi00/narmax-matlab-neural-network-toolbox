@@ -33,6 +33,7 @@ classdef NARXmodel
         maxStep = 20;
         initialTraining = 5;
         zero_input_delay = false;
+        hiddenTransferFcn = 'tansig';
         
     end
     
@@ -64,6 +65,7 @@ classdef NARXmodel
             else
                 obj.narx = narxnet(1:obj.delay, 1:obj.delay, obj.neurons);
             end
+            obj.narx.layers{1}.transferFcn = obj.hiddenTransferFcn;
             
             if obj.earlyStoppage
                 obj.narx.divideParam.trainRatio=0.70;
