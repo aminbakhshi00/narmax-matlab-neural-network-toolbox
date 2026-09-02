@@ -86,6 +86,10 @@ classdef NARXmodel
             obj.narx.input.processFcns = {};
             obj.narx.trainFcn = obj.trainAlg;
 
+            if strcmp(obj.hiddenTransferFcn, 'poslin')
+                obj.narx = obj.He_Initialize(obj.narx, u, y);
+            end
+
             if obj.writeToConsole
                disp('Started Training -----> NARX MODEL');
             end
@@ -285,6 +289,31 @@ classdef NARXmodel
     end
     
     methods (Access=private)
+        
+        function Network = He_Initialize(~, Network, p1, t1)
+        %HE_INITIALIZE Draw layer 1 from N(0, 2/fanIn), the He scheme for ReLU.
+        %
+        %   poslin zeroes every negative net input, which halves the variance
+        %   a layer passes on, so its weights are drawn with twice the
+        %   variance of a symmetric transfer function's: the factor 2 in
+        %   2/fanIn is exactly that compensation. fanIn is the width of
+        %   layer 1's tapped delay lines together, and the biases start at
+        %   zero.
+        %
+        %   Sizing the weights needs a configured network, so the net is
+        %   configured on the training sequence first. TRAIN leaves the
+        %   weights of an already configured network alone, so these are the
+        %   values training starts from.
+
+            [X, ~, ~, T] = preparets(Network, p1, {}, t1);
+            Network = configure(Network, X, T);
+
+            fanIn = size(Network.IW{1,1}, 2) + size(Network.LW{1,2}, 2);
+            deviation = sqrt(2 / fanIn);
+            Network.IW{1,1} = deviation * randn(size(Network.IW{1,1}));
+            Network.LW{1,2} = deviation * randn(size(Network.LW{1,2}));
+            Network.b{1} = zeros(size(Network.b{1}));
+        end
         
         function [Net_Close, tr, time_train, Xs, Xi, Ai, Ts] = Standard_Training(obj, Network, p1, t1, Ew, epochs, delay, Horizon_Step)
 
