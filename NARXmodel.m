@@ -34,6 +34,9 @@ classdef NARXmodel
         initialTraining = 5;
         zero_input_delay = false;
         hiddenTransferFcn = 'tansig';
+        useModifiedTraining = true;
+        sequenceSeed = 0;
+        segmentStart = 1;
         
     end
     
@@ -65,21 +68,32 @@ classdef NARXmodel
             else
                 obj.narx = narxnet(1:obj.delay, 1:obj.delay, obj.neurons);
             end
-            obj.narx.layers{1}.transferFcn = obj.hiddenTransferFcn;
-            
-            if obj.earlyStoppage
-                obj.narx.divideParam.trainRatio=0.70;
-                obj.narx.divideParam.valRatio=0.15;
-                obj.narx.divideParam.testRatio=0.15;
-                obj.narx.trainParam.min_grad=0;
-            else
-                obj.narx.divideParam.trainRatio=1;
-                obj.narx.divideParam.valRatio=0;
-                obj.narx.divideParam.testRatio=0;
-                obj.narx.trainParam.min_grad=0;
+            if ~isempty(obj.neurons)
+                % With no hidden layer there is no hidden transfer function
+                % to set: layer 1 is then the linear output layer itself.
+                obj.narx.layers{1}.transferFcn = obj.hiddenTransferFcn;
             end
             
+            obj.narx.trainParam.min_grad=0;
+            
+            % No early stopping means no split at all: every sequence trains.
             obj.narx.divideFcn = '';
+            if obj.earlyStoppage
+                % divideblock by sequence, never dividerand: consecutive
+                % sequences overlap by most of their samples, so a random
+                % split would leak near-duplicates into the validation set.
+                % Setting divideFcn resets divideParam to that function's
+                % defaults, so the ratios must be set after it, not before.
+                % Nothing reads the inner test block. Handing its 15% to
+                % training instead was tried at 24 taps over three seeds and
+                % landed inside the seed scatter, so it stays here. The ARX
+                % sidesteps the question by switching early stopping off.
+                obj.narx.divideFcn = 'divideblock';
+                obj.narx.divideMode = 'sample';
+                obj.narx.divideParam.trainRatio = 0.70;
+                obj.narx.divideParam.valRatio = 0.15;
+                obj.narx.divideParam.testRatio = 0.15;
+            end
 
             obj.narx = closeloop(obj.narx);
             obj.narx.output.processFcns = {};
@@ -149,7 +163,7 @@ classdef NARXmodel
                             Change=0;
                             Current_Horizon_Step = [Current_Horizon_Step; Horizon_Step];
                             Modified_Training_Iterations = [Modified_Training_Iterations; 0];
-                        elseif ~strcmp(obj.trainAlg, 'trainlm') || tr.mu(end) < Mu_Max               
+                        elseif ~obj.useModifiedTraining || ~strcmp(obj.trainAlg, 'trainlm') || tr.mu(end) < Mu_Max               
                             [Horizon_Step, ~, epochs_ST] = obj.Horizon_Step_Selection(obj.narx, Horizon_Step, u, y, Ew, obj.delay, ...
                                                                                       Max_step, Lo_Loc_Min_Iter, Fu_Loc_Min_Iter);
                             
@@ -297,8 +311,25 @@ classdef NARXmodel
         %   a layer passes on, so its weights are drawn with twice the
         %   variance of a symmetric transfer function's: the factor 2 in
         %   2/fanIn is exactly that compensation. fanIn is the width of
-        %   layer 1's tapped delay lines together, and the biases start at
-        %   zero.
+        %   layer 1's tapped delay lines together.
+        %
+        %   The biases do not start at zero, because He's scheme assumes a
+        %   centred input and NORMALIZE does not give one: it maps both
+        %   series to [0,1], and the process functions are off, so every
+        %   element of layer 1's input is non-negative. A unit's net input
+        %   is then w*x with x roughly constant and positive, so its sign is
+        %   essentially the sign of sum(w) -- the unit is either active for
+        %   almost the whole record or for none of it, and half the layer
+        %   starts dead. TRAINLM's first steps kill the rest: with every
+        %   unit off the Jacobian is zero, no step can lower the error, mu
+        %   climbs to mu_max on the first epoch and every later call ends
+        %   the same way, which strands the horizon curriculum.
+        %
+        %   Each unit is therefore biased by one standard deviation of its
+        %   own net input at the mean sample, DEVIATION*norm(meanInput), so
+        %   about five units in six start on the active side. That quantity
+        %   is sqrt(mean(p1)^2 + mean(t1)^2) whatever DELAY is, so the same
+        %   fraction starts active at every tapped-delay length.
         %
         %   Sizing the weights needs a configured network, so the net is
         %   configured on the training sequence first. TRAIN leaves the
@@ -312,7 +343,13 @@ classdef NARXmodel
             deviation = sqrt(2 / fanIn);
             Network.IW{1,1} = deviation * randn(size(Network.IW{1,1}));
             Network.LW{1,2} = deviation * randn(size(Network.LW{1,2}));
-            Network.b{1} = zeros(size(Network.b{1}));
+
+            % The mean sample as layer 1 sees it: the input taps hold p1 and
+            % the feedback taps hold t1, so each block takes its own mean.
+            meanInput = [mean(cell2mat(p1)) * ones(size(Network.IW{1,1}, 2), 1)
+                         mean(cell2mat(t1)) * ones(size(Network.LW{1,2}, 2), 1)];
+            Network.b{1} = deviation * norm(meanInput) * ones(size(Network.b{1}));
+            disp('   Layer 1 initialized with He scheme for poslin, biases set to one std dev of net input at mean sample and the values are fixed for the rest of training bias is: ' + num2str(Network.b{1}) + ' and weights are: ' + num2str(Network.IW{1,1}) + ' and ' + num2str(Network.LW{1,2}));
         end
         
         function [Net_Close, tr, time_train, Xs, Xi, Ai, Ts] = Standard_Training(obj, Network, p1, t1, Ew, epochs, delay, Horizon_Step)
@@ -532,87 +569,68 @@ classdef NARXmodel
 
         end
        
-        function Dc1 = prepare_data(~, interval, YY, numdelay)
+        function Dc1 = prepare_data(obj, interval, YY, numdelay)
+        %PREPARE_DATA Cut the series into INTERVAL+NUMDELAY sample sequences.
+        %
+        %   Each sequence is one training example. Its first NUMDELAY samples
+        %   are the warm-up that fills the tapped delay lines -- PREPARETS
+        %   consumes exactly those -- and the remaining INTERVAL samples are
+        %   the multi-step targets. A 24-tap network therefore spends the
+        %   first 24 samples of every sequence loading its delay lines and is
+        %   scored on the INTERVAL samples that follow.
+        %
+        %   The origins are drawn at random, which is the "randomly
+        %   overlapping" scheme of Kelley (2024). The two schemes it replaces
+        %   both had a defect:
+        %
+        %     stride 1          the window slid one sample, so consecutive
+        %                       sequences were nearly identical and Kelley
+        %                       found the redundancy bought nothing.
+        %     stride = INTERVAL  the target halves tiled the series, so every
+        %                       origin landed INTERVAL apart -- and once
+        %                       INTERVAL reaches the period of the data they
+        %                       all fall at the same point of the cycle.
+        %
+        %   As many origins are drawn as the tiling would have given, so the
+        %   redundancy of stride 1 is avoided at the same cost in sequences,
+        %   but they are placed uniformly instead of on a grid.
 
             [m,n] = size(YY);
-            p = floor((m-numdelay)/interval);
+            new_length = interval+numdelay;
+            lastStart = m - new_length + 1;            % last origin that fits
+            p = floor((m - new_length)/interval) + 1;  % as many as a tiling
 
-            YY_new = [];
-            for i=1:p
-                YY_new = [YY_new; YY(1+(i-1)*interval:i*interval+numdelay,:)];
+            % TRAIN cuts the inputs, the targets and the error weights with
+            % three separate calls to this function, and all three have to
+            % land on the same origins or the targets stop matching their
+            % inputs. Seeding a private stream from the window geometry gives
+            % that without carrying any state between the calls, and yields a
+            % fresh draw whenever the horizon changes. SEQUENCESEED moves the
+            % whole fit onto a different draw.
+            stream = RandStream('twister', ...
+                'Seed', obj.sequenceSeed + 1000*interval + numdelay);
+            starts = sort(randperm(stream, lastStart, min(p, lastStart)));
+
+            index = (1:new_length)' + (starts - 1);
+
+            % A split built from seasons of different years has a join in it.
+            % Drop the sequences that straddle one: their delay line would
+            % span months of missing record.
+            joins = obj.segmentStart(obj.segmentStart > 1);
+            for join = joins(:)'
+                index(:, index(1,:) < join & index(end,:) >= join) = [];
+            end
+            p = size(index, 2);
+            YY_new = zeros(new_length, p*n);
+            for column = 1:n
+                series = YY(:,column);
+                YY_new(:, (column-1)*p + (1:p)) = series(index);
             end
 
-            numseq = p*n;
-            new_length = interval+numdelay;
-            YY_new = reshape(YY_new,new_length,numseq);
             Dc1 = mat2cell(YY_new,ones(new_length,1))';
             
         end
         
-        function [Dc1, Dc2] = prepare_data_random85(~, interval, UU, YY, numdelay)
-
-            [m,n] = size(YY);
-            p = floor((m-numdelay)/interval);
-
-            YY_new = [];
-            UU_new = [];
-            for i=1:p
-                YY_new = [YY_new; YY(1+(i-1)*interval:i*interval+numdelay,:)];
-                UU_new = [UU_new; UU(1+(i-1)*interval:i*interval+numdelay,:)];
-            end
-
-            numseq = p*n;
-            new_length = interval+numdelay;
-            YY_new = reshape(YY_new,new_length,numseq);
-            UU_new = reshape(UU_new,new_length,numseq);
-            r = randperm(size(YY_new, 2), floor(size(YY_new, 2) * 0.85));
-            YY_new = YY_new(:, r);
-            UU_new = UU_new(:, r);
-            Dc2 = mat2cell(YY_new,ones(new_length,1))';
-            Dc1 = mat2cell(UU_new,ones(new_length,1))'; 
-            
-        end
-        
-        function [Dc1, Dc2] = prepare_data_with_overlap_random15(~, interval, UU, YY, numdelay)
-
-            [m,n] = size(YY);
-            p = floor(m-numdelay-interval);
-
-            YY_new = [];
-            UU_new = [];
-            for i=1:p
-                YY_new = [YY_new; YY(i:i+interval+numdelay-1,:)];
-                UU_new = [UU_new; UU(i:i+interval+numdelay-1,:)];
-            end
-
-            numseq = p*n;
-            new_length = interval+numdelay;
-            YY_new = reshape(YY_new,new_length,numseq);
-            UU_new = reshape(UU_new,new_length,numseq);
-            r = randperm(size(YY_new, 2), floor(size(YY_new, 2) * 0.10));
-            YY_new = YY_new(:, r);
-            UU_new = UU_new(:, r);
-            Dc2 = mat2cell(YY_new,ones(new_length,1))';
-            Dc1 = mat2cell(UU_new,ones(new_length,1))'; 
-            
-        end
-        
-        function Dc1 = prepare_data_with_overlap(~, interval, YY, numdelay)
-
-            [m,n] = size(YY);
-            p = floor(m-numdelay-interval);
-
-            YY_new = [];
-            for i=1:p
-                YY_new = [YY_new; YY(i:i+interval+numdelay-1,:)];
-            end
-
-            numseq = p*n;
-            new_length = interval+numdelay;
-            YY_new = reshape(YY_new,new_length,numseq);
-            Dc1 = mat2cell(YY_new,ones(new_length,1))';
-            
-        end
         
     end
     

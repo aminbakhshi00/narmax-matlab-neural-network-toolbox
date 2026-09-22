@@ -2,5 +2,10 @@ train/
 narxmodel_architecture.m
 *.png
 *.md
+Electricity_Load_Forecasting/lin1996_fig5
 Electricity_Load_Forecasting/cache/
+Electricity_Load_Forecasting/session_transcript
 *.mat
+Explainability/
+VanishingGradientsNARX/
+*.zip

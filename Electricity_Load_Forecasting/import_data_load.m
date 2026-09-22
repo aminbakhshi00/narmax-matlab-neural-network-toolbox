@@ -1,106 +1,90 @@
-function [p, y, t] = import_data_load(split)
+function [p, y, t, segmentStart] = import_data_load(split)
 %IMPORT_DATA_LOAD Hourly Panama electricity demand in the NARX [p, y] format.
 %
-%   [P, Y] = IMPORT_DATA_LOAD() returns the external input p(t) and the
-%   measured target y(t) of the default training split as column vectors in
-%   their recorded units, ready for NARXmodel.train(p, y, train_k):
+%   [P, Y] = IMPORT_DATA_LOAD(SPLIT) returns the external input p(t) and the
+%   measured target y(t) as column vectors in their recorded units, ready
+%   for NARXmodel.train(p, y, train_k):
 %
-%     P   air temperature at Tocumen, column T2M_toc of the continuous
-%         dataset, in degrees Celsius. It is the external input p(t).
-%     Y   national hourly electricity demand, column nat_demand, in MW. It
-%         is the first data column of the continuous dataset and the
-%         measured target y(t).
+%     P   air temperature at Tocumen, column T2M_toc, in degrees Celsius.
+%     Y   national hourly electricity demand, column nat_demand, in MW.
 %
-%   [P, Y, T] = IMPORT_DATA_LOAD(...) also returns the hourly datetime
-%   index, so a caller can group by hour of day, weekday or season without
-%   re-reading the file.
+%   [P, Y, T] = IMPORT_DATA_LOAD(...) also returns the hourly datetime index.
 %
-%   SPLIT selects a contiguous span of the hourly series:
+%   [P, Y, T, SEGMENTSTART] = IMPORT_DATA_LOAD(...) also returns the row
+%   index at which each continuous stretch begins. A split made of adjacent
+%   files is one stretch, so SEGMENTSTART is 1; a split that joins seasons
+%   from different years has one entry per stretch, and the caller can use
+%   them to avoid building a window that straddles a join.
 %
-%     'train'      2015-01-03 01:00 to 2018-12-31 23:00  (35,015 hours)
-%     'test'       2019-01-01 00:00 to 2019-12-31 23:00  ( 8,760 hours)
-%     'dry-train'  2017-12-15 00:00 to 2018-04-15 23:00  ( 2,928 hours)
-%     'dry-val'    2016-12-15 00:00 to 2017-04-15 23:00  ( 2,928 hours)
-%     'dry-test'   2019-01-01 00:00 to 2019-04-15 23:00  ( 2,520 hours)
-%     'all'        the complete file, to 2020-06-27 00:00 (48,048 hours)
-%     [t1 t2]      any datetime range, for example one rainy season:
-%                  import_data_load([datetime(2018,5,1), datetime(2018,11,30)])
+%   The record is stored as one CSV per season under data/seasons, cut so
+%   that every file is internally continuous and hourly. This function only
+%   reads the files a split names and concatenates them; all of the cutting
+%   was done once, up front. data/raw holds the original download untouched,
+%   and data/seasons/manifest.csv lists every segment with its span.
 %
-%   'dry-train', 'dry-val' and 'dry-test' are the three windows the delay
-%   experiment uses. Each is one Panamanian dry season (mid-December to
-%   mid-April) of a different year: one to fit on, one to choose between
-%   fitted networks on, and one, held out until the end, to report on.
-%   Fitting one model per season and applying it out of year without
-%   refitting is the protocol of Hagan's short-term load forecasting work. Note that the
-%   seasonal swing in this record is small -- monthly mean demand spans
-%   1148.6 to 1205.6 MW and the mean daily peak-to-trough amplitude spans
-%   455.4 to 496.6 MW -- so a season window is mainly a homogeneous,
-%   affordable span, not a way of isolating a large annual cycle.
+%   SPLIT is one of:
 %
-%   All four named splits end before 2020-03-16, when COVID-19
-%   restrictions moved the monthly mean demand down by about 15%
-%   (2020-02: 1269.5 MW, 2020-04: 1062.0 MW). That regime shift is only
-%   reachable through 'all'.
+%     'dry-train'  the 2016-17 and 2017-18 dry seasons   (5,856 hours)
+%     'dry-val'    the 2015-16 dry season                (2,952 hours)
+%     'dry-test'   1 Jan to 15 Apr 2019, held out        (2,520 hours)
+%     'train'      2015-01-03 to 2018-12-31             (35,015 hours)
+%     'test'       calendar 2019                         (8,760 hours)
+%     'all'        everything, including the COVID-19 period (48,048 hours)
 %
-%   The returned span is always contiguous and hourly, which is what the
-%   tapped delay lines of the NARX model require: a delay of 1 is one hour,
-%   24 is one day and 168 is one week. The function asserts this rather
-%   than assuming it.
+%   or a string array of segment names, for example
+%   ["dry_2016-2017", "dry_2017-2018"].
 %
-%   The recorded series is returned unaltered. It contains a small number
-%   of genuine outage hours (13 hours below 700 MW, the lowest 85.2 MW on
-%   2019-01-20), which are measurements of the grid, not missing data.
+%   'dry-train' is two dry seasons rather than one: fitting and testing on
+%   the same kind of season is what keeps the model in one regime, and the
+%   2015-16 season -- previously unused -- frees 2016-17 to join the
+%   training set. The two are a year apart, so the series handed to the
+%   model has one join in it, which is what SEGMENTSTART marks.
 %
-%   See also TRAIN_NARX_LOAD, SAMPLE_LOAD_WINDOWS, NARXMODEL.
+%   Each named split is one Panamanian dry season (mid-December to
+%   mid-April) or a span built from whole seasons. Fitting on dry seasons
+%   and applying out of year without refitting is the protocol of Hagan's
+%   short-term load forecasting work.
+%
+%   See also SAMPLE_LOAD_WINDOWS, NARXMODEL.
 
-    if nargin < 1
-        split = 'train';
-    end
-
-    dataFile = fullfile(fileparts(mfilename('fullpath')), 'continuous dataset.csv');
-    data = readtable(dataFile);
-
-    t = data.datetime;
-    p = data.T2M_toc;
-    y = data.nat_demand;
-
-    span = split_span(split);
-    keep = t >= span(1) & t <= span(2);
-    t = t(keep);
-    p = p(keep);
-    y = y(keep);
-
-    assert(~isempty(t), 'The requested span selects no hours.');
-    assert(all(diff(t) == hours(1)), ...
-        'The selected span is not a continuous hourly series.');
-
+if nargin < 1
+    split = 'dry-train';
 end
 
-function span = split_span(split)
-%SPLIT_SPAN Map a named split, or pass a caller-supplied datetime range.
+dry = ["dry_2014-2015", "wet_2015", "dry_2015-2016", "wet_2016", ...
+       "dry_2016-2017", "wet_2017", "dry_2017-2018", "wet_2018", ...
+       "dry_2018-2019_dec", "dry_2018-2019_janapr", "wet_2019", ...
+       "dry_2019-2020_dec", "dry_2019-2020_janmar", "covid_2020"];
 
-    if isdatetime(split)
-        assert(numel(split) == 2, 'A datetime split must be [t1 t2].');
-        span = split;
-        return;
-    end
-
-    switch lower(split)
-        case 'train'
-            span = [datetime(2015,1,3,1,0,0), datetime(2018,12,31,23,0,0)];
-        case 'test'
-            span = [datetime(2019,1,1,0,0,0), datetime(2019,12,31,23,0,0)];
-        case 'dry-train'
-            span = [datetime(2017,12,15,0,0,0), datetime(2018,4,15,23,0,0)];
-        case 'dry-val'
-            span = [datetime(2016,12,15,0,0,0), datetime(2017,4,15,23,0,0)];
-        case 'dry-test'
-            span = [datetime(2019,1,1,0,0,0), datetime(2019,4,15,23,0,0)];
-        case 'all'
-            span = [datetime(2015,1,3,1,0,0), datetime(2020,6,27,0,0,0)];
+if isstring(split) || iscellstr(split) %#ok<ISCLSTR>
+    files = string(split);
+else
+    switch lower(string(split))
+        case "dry-train", files = ["dry_2016-2017", "dry_2017-2018"];
+        case "dry-val",   files = "dry_2015-2016";
+        case "dry-test",  files = "dry_2018-2019_janapr";
+        case "train",     files = dry(1:9);
+        case "test",      files = ["dry_2018-2019_janapr", "wet_2019", ...
+                                   "dry_2019-2020_dec"];
+        case "all",       files = dry;
         otherwise
-            error(['Unknown split ''%s''. Use train, test, dry-train, ', ...
-                   'dry-val, dry-test, all or [t1 t2].'], split);
+            error('import_data_load:unknownSplit', ...
+                'Unknown split "%s". See HELP IMPORT_DATA_LOAD.', string(split));
     end
+end
 
+seasonFolder = fullfile(fileparts(mfilename('fullpath')), 'data', 'seasons');
+blocks = cell(1, numel(files));
+for k = 1:numel(files)
+    blocks{k} = readtable(fullfile(seasonFolder, files(k) + ".csv"));
+end
+data = vertcat(blocks{:});
+
+t = datetime(data.datetime);
+p = data.T2M_toc;
+y = data.nat_demand;
+
+% A join is any place the hourly index skips. Files that happen to be
+% adjacent in time therefore read as one continuous stretch.
+segmentStart = [1; find(diff(t) ~= hours(1)) + 1];
 end

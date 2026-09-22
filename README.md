@@ -32,3 +32,19 @@ Contains MATLAB implementation of NARX and NARMAX models for time-series modelin
     | ------------ |
     | NARX Model: [**NARXModel.m**](https://github.com/joekelley120/narmax-matlab-neural-network-toolbox/blob/master/NARXmodel.m) |
     | NARMAX Model: [**NARMAXModel.m**](https://github.com/joekelley120/narmax-matlab-neural-network-toolbox/blob/master/NARMAXmodel.m) |
+
+## Training Sequences:
+`NARXmodel` cuts the record into training sequences of `Horizon_Step + delay`
+samples: the first `delay` samples are the warm-up that fills the tapped delay
+lines, and the rest are the multi-step targets.
+
+**The origins of those sequences are drawn at random** — the "randomly
+overlapping" scheme of Kelley (2024). NARX and ARX both use it and there is no
+switch to turn it off. As many origins are drawn as a non-overlapping tiling
+would give, but placed uniformly rather than on a grid, which avoids both the
+redundancy of a one-sample stride and the risk that a tiling lands every origin
+at the same point of a periodic cycle. `sequenceSeed` (default 0) selects the
+draw. See `prepare_data` in `NARXmodel.m`.
+
+`NARMAXmodel` is a separate class and still tiles; it has not been changed.
+
