@@ -9,3 +9,5 @@ Electricity_Load_Forecasting/session_transcript
 Explainability/
 VanishingGradientsNARX/
 *.zip
+*.csv
+*.xlsx
