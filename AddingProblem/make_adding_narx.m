@@ -1,7 +1,7 @@
 function net = make_adding_narx(options)
 %MAKE_ADDING_NARX The closed-loop NARX used for the adding problem.
 %
-%   NET = MAKE_ADDING_NARX('Example', SPLIT, 'TransferFcn', F) builds
+%   NET = MAKE_ADDING_NARX('Example', SPLIT, 'ActivationFcn', F) builds
 %
 %       narxnet(0, 1:8, 2, 'closed', 'trainlm')
 %
@@ -20,7 +20,7 @@ function net = make_adding_narx(options)
 %   R^1 = 2, S^1 = 2, S^2 = 1 and D = 8 the network has 25 trainable
 %   parameters.
 %
-%   TRANSFERFCN selects f^1 AND, with it, the initialisation. The two are
+%   ACTIVATIONFCN selects f^1 AND, with it, the initialisation. The two are
 %   tied together because each activation is paired with the initialisation
 %   that suits it, and those are the two models this study compares.
 %
@@ -67,7 +67,7 @@ function net = make_adding_narx(options)
 %   NAME-VALUE OPTIONS
 %     Example      A split from GENERATE_ADDING_DATASET, used to size the
 %                  network through CONFIGURE. Required.
-%     TransferFcn  "poslin" or "tansig". Default "poslin".
+%     ActivationFcn  "poslin" or "tansig". Default "poslin".
 %     Seed         Weight seed, from ADDING_SEEDS. Default 101.
 %     Delay        D, output-feedback taps. Default 8.
 %     Neurons      S^1. Default 2.
@@ -78,7 +78,7 @@ function net = make_adding_narx(options)
 
 arguments
     options.Example struct
-    options.TransferFcn (1,1) string {mustBeMember(options.TransferFcn, ...
+    options.ActivationFcn (1,1) string {mustBeMember(options.ActivationFcn, ...
         ["poslin", "tansig"])} = "poslin"
     options.Seed (1,1) double = 101
     options.Delay (1,1) double {mustBeInteger, mustBePositive} = 8
@@ -89,7 +89,7 @@ end
 delay = options.Delay;
 neurons = options.Neurons;
 
-if options.TransferFcn == "tansig"
+if options.ActivationFcn == "tansig"
     % CONFIGURE draws the Nguyen-Widrow weights from the global stream, so it
     % has to be seeded before the call. For poslin every weight is overwritten
     % afterwards from a private stream, so the global state never reaches the
@@ -100,7 +100,7 @@ end
 net = narxnet(0, 1:delay, neurons, 'closed', 'trainlm');
 net.inputs{1}.processFcns = {};
 net.outputs{2}.processFcns = {};
-net.layers{1}.transferFcn = char(options.TransferFcn);
+net.layers{1}.transferFcn = char(options.ActivationFcn);   % MATLAB's property name
 net.layers{2}.transferFcn = 'purelin';
 net.divideFcn = '';                    % no validation split; see RUN_ADDING
 net.performFcn = 'mse';
@@ -111,7 +111,7 @@ yCells = repmat({zeros(1, size(options.Example.pValues, 2))}, 1, ...
 yCells{end} = options.Example.yFinal;
 net = configure(net, pCells, yCells);
 
-if options.TransferFcn == "poslin"
+if options.ActivationFcn == "poslin"
     taps = size(net.LW{1,2}, 2);
     stream = RandStream('mt19937ar', 'Seed', options.Seed);
     net.IW{1,1} = options.InputStd * randn(stream, size(net.IW{1,1}));

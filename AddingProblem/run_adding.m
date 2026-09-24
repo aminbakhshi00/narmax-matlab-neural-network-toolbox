@@ -1,13 +1,13 @@
 function result = run_adding(options)
 %RUN_ADDING Train the adding-problem NARX and record every run.
 %
-%   RESULT = RUN_ADDING('TransferFcn', F) trains the closed-loop NARX of
+%   RESULT = RUN_ADDING('ActivationFcn', F) trains the closed-loop NARX of
 %   MAKE_ADDING_NARX at T = 150, 200, 300 and 400 over 15 runs each, and
 %   writes one checkpoint per run plus RESULTS.MAT and SUMMARY.XLSX into a
 %   results folder.
 %
 %   The 15 runs vary the initial weights AND the dataset; see ADDING_SEEDS.
-%   Both transfer functions get the same 15 (weight, dataset) pairs, so the
+%   Both activation functions get the same 15 (weight, dataset) pairs, so the
 %   two models are compared run by run on identical data from identical
 %   starting points.
 %
@@ -33,12 +33,18 @@ function result = run_adding(options)
 %   applied after a run finishes, on held-out MSE. It never stops anything.
 %   The only MSE that stops a run is the training MSE against GOAL.
 %
+%   STOPREASON in the results table names which of those ended the run:
+%   "goal", "budget", "stall", or "interrupted" if MAXSECONDS cut the call
+%   short. LASTBLOCKSTOP is MATLAB's own string for the final block, kept
+%   because it distinguishes a max-mu block from a flat one -- but it is a
+%   BLOCK-level message and must not be read as the run's reason.
+%
 %   RESUMING. Each run has its own checkpoint and each call trains for at
 %   most MAXSECONDS, so call it again to continue; finished runs are loaded,
 %   not retrained.
 %
 %   NAME-VALUE OPTIONS
-%     TransferFcn     "poslin" or "tansig". Default "poslin".
+%     ActivationFcn     "poslin" or "tansig". Default "poslin".
 %     Lengths         Default [150 200 300 400].
 %     Runs            Default 1:15.
 %     NumTrain        Default 5000.
@@ -49,12 +55,12 @@ function result = run_adding(options)
 %     StallTolerance  Default 0.005.
 %     Goal            Training-MSE success criterion. Default 1e-6.
 %     MaxSeconds      Wall-clock budget for one call. Default 1350.
-%     OutputName      Results folder. Default "results_" + TransferFcn.
+%     OutputName      Results folder. Default "results_" + ActivationFcn.
 %
 %   See also MAKE_ADDING_NARX, ADDING_SEEDS, PLOT_ADDING_FIG2.
 
 arguments
-    options.TransferFcn (1,1) string {mustBeMember(options.TransferFcn, ...
+    options.ActivationFcn (1,1) string {mustBeMember(options.ActivationFcn, ...
         ["poslin", "tansig"])} = "poslin"
     options.Lengths (1,:) double {mustBePositive} = [150 200 300 400]
     options.Runs (1,:) double {mustBePositive} = 1:15
@@ -69,25 +75,26 @@ arguments
     options.OutputName (1,1) string = ""
 end
 
-transferFcn = options.TransferFcn;
+activationFcn = options.ActivationFcn;
 if options.OutputName == ""
-    options.OutputName = "results_" + transferFcn;
+    options.OutputName = "results_" + activationFcn;
 end
 outputFolder = fullfile(fileparts(mfilename('fullpath')), options.OutputName);
 if ~isfolder(outputFolder), mkdir(outputFolder); end
 
 callTimer = tic;
-fprintf('\nADDING PROBLEM, closed-loop NARX, f^1 = %s\n', transferFcn);
+fprintf('\nADDING PROBLEM, closed-loop NARX, f^1 = %s\n', activationFcn);
 fprintf('  D = 8, S^1 = 2 (25 parameters), %d train / %d test\n', ...
     options.NumTrain, options.NumTest);
 fprintf('  T %s x %d runs, budget %d epochs, this call stops after %d s\n\n', ...
     mat2str(options.Lengths), numel(options.Runs), options.EpochBudget, ...
     options.MaxSeconds);
 
-rows = struct('sequenceLength', {}, 'transferFcn', {}, 'run', {}, ...
+rows = struct('sequenceLength', {}, 'activationFcn', {}, 'run', {}, ...
     'epochs', {}, 'trainMSE', {}, 'testMSE', {}, 'baselineMSE', {}, ...
     'ratioToBaseline', {}, 'solved', {}, 'gradient', {}, 'seconds', {}, ...
-    'stop', {}, 'complete', {}, 'curveEpoch', {}, 'curveTestMSE', {}, ...
+    'stopReason', {}, 'lastBlockStop', {}, 'complete', {}, ...
+    'curveEpoch', {}, 'curveTestMSE', {}, ...
     'curveTrainMSE', {}, 'weights', {}, 'initialWeights', {});
 names = struct('weights', strings(1,0), 'initialWeights', strings(1,0));
 outOfTime = false;
@@ -105,14 +112,14 @@ for run = options.Runs
         errorWeights = repmat({zeros(1, options.NumTrain)}, 1, finalTime);
         errorWeights{end} = finalTime * ones(1, options.NumTrain);
 
-        tag = sprintf('T%03d_%s_run%02d', finalTime, transferFcn, run);
+        tag = sprintf('T%03d_%s_run%02d', finalTime, activationFcn, run);
         checkpoint = fullfile(outputFolder, tag + ".mat");
 
         if isfile(checkpoint)
             state = load(checkpoint, 'state').state;
         else
             net = make_adding_narx('Example', dataset.train, ...
-                'TransferFcn', transferFcn, 'Seed', weightSeed);
+                'ActivationFcn', activationFcn, 'Seed', weightSeed);
             net.trainParam.goal = options.Goal;
             state.net = net;
             state.initial = snapshot(net);
@@ -164,7 +171,7 @@ for run = options.Runs
             'LW21', state.net.LW{2,1}, 'b1', state.net.b{1}, 'b2', state.net.b{2});
 
         row.sequenceLength = finalTime;
-        row.transferFcn = transferFcn;
+        row.activationFcn = activationFcn;
         row.run = run;
         row.epochs = state.epochsDone;
         row.trainMSE = trainMSE;
@@ -174,9 +181,22 @@ for run = options.Runs
         row.solved = testMSE < 0.01;
         row.gradient = state.gradient;
         row.seconds = state.seconds;
-        row.stop = state.stop;
-        row.complete = state.epochsDone >= options.EpochBudget || ...
-            state.stalled >= options.StallBlocks || trainMSE <= options.Goal;
+        % MATLAB reports why the LAST BLOCK ended, and a block's own epoch
+        % limit is BLOCKEPOCHS, not the run's budget -- so "Reached maximum
+        % number of epochs" from a full block says nothing about why the RUN
+        % ended. Record the run-level reason separately, from the conditions
+        % the loop actually tests.
+        if trainMSE <= options.Goal
+            row.stopReason = "goal";
+        elseif state.epochsDone >= options.EpochBudget
+            row.stopReason = "budget";
+        elseif state.stalled >= options.StallBlocks
+            row.stopReason = "stall";
+        else
+            row.stopReason = "interrupted";
+        end
+        row.lastBlockStop = state.stop;
+        row.complete = row.stopReason ~= "interrupted";
         row.curveEpoch = state.curveEpoch;
         row.curveTestMSE = state.curveTestMSE;
         row.curveTrainMSE = state.curveTrainMSE;
@@ -284,7 +304,7 @@ if iscell(values)
     % length, which they do not here; handle both so the sheet never fails.
     values = vertcat(values{:});
 end
-sheet = [result.table(:, {'sequenceLength', 'transferFcn', 'run', 'testMSE'}), ...
+sheet = [result.table(:, {'sequenceLength', 'activationFcn', 'run', 'testMSE'}), ...
          array2table(values, 'VariableNames', cellstr(result.weightNames.(field)))];
 end
 

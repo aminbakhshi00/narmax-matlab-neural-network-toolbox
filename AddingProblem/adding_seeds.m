@@ -17,7 +17,7 @@ function [dataSeed, weightSeed] = adding_seeds(finalTime, run)
 %   property of that length, in every configuration tested, forever.
 %
 %   Reliability is therefore reported over 15 (weight, dataset) pairs, and
-%   both transfer functions are given exactly the same 15 pairs, so the
+%   both activation functions are given exactly the same 15 pairs, so the
 %   comparison between them is paired run by run.
 %
 %   See also RUN_ADDING, GENERATE_ADDING_DATASET, MAKE_ADDING_NARX.

@@ -42,7 +42,7 @@ outputFile = fullfile(fileparts(mfilename('fullpath')), ...
 probe = generate_adding_dataset('SequenceLength', 20, 'NumTrain', 4, ...
     'NumTest', 4, 'Seed', 1);
 built = make_adding_narx('Delay', numDelays, 'Neurons', numNeurons, ...
-    'Example', probe.train, 'TransferFcn', "poslin", 'Seed', 1);
+    'Example', probe.train, 'ActivationFcn', "poslin", 'Seed', 1);
 assert(built.inputs{1}.size == numInputs, 'R^1 drawn as %d.', numInputs);
 assert(isequal(built.inputWeights{1,1}.delays, 0), 'Drawn with no input TDL.');
 assert(isequal(size(built.IW{1,1}), [numNeurons numInputs]), 'IW^{1,1} size.');
@@ -132,7 +132,7 @@ drawBox(70.0, 22.0, 7.0, 9.0, lw);
 placeText(73.5, 28.3, '$\mathbf{b}^1$',                       fsMain);
 placeText(73.5, 24.2, sprintf('$%d \\times 1$', numNeurons),  fsSize);
 
-% --------------------------------------------------- transfer function 1 ---
+% --------------------------------------------------- activation function 1 ---
 placeText(81.5, 52.0, '$\mathbf{n}^1(t)$',                    fsMain);
 placeText(81.5, 47.8, sprintf('$%d \\times 1$', numNeurons),  fsSize);
 

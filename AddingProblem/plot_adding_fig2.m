@@ -1,31 +1,42 @@
 function plot_adding_fig2(options)
 %PLOT_ADDING_FIG2 Le2015 Figure 2, redrawn for the closed-loop NARX.
 %
-%   Reads the results of RUN_ADDING for both transfer functions and draws the
+%   Reads the results of RUN_ADDING for both activation functions and draws the
 %   four-panel figure of Le2015 Figure 2: held-out final-time MSE against
 %   training epoch, one panel per sequence length, with the always-predict-
 %   the-mean reference as a dotted line.
 %
-%   Le2015 compares an IRNN, an LSTM, an RNN with tanh and an RNN with ReLUs.
-%   This project has no RNN and no LSTM, so the two curves are the NARX
-%   counterparts of the two models it does have:
+%   The two curves are labelled by their activation function alone. Each comes
+%   with its own initialisation -- the lag-1/lag-8 skip for poslin, MATLAB's
+%   Nguyen-Widrow default for tansig -- which the README describes; putting
+%   that in the legend would crowd the panels for no gain.
 %
-%     poslin + lag-1/lag-8 skip   the IRNN analogue
-%     tansig + Nguyen-Widrow      MATLAB's default, under a saturating f^1
+%   HOW THE MEDIAN IS TAKEN. The runs stop at different epochs and reach
+%   different losses, so there is no "median run" to plot. The bold line is a
+%   POINTWISE median instead, built in three steps:
 %
-%   TWO DIFFERENCES FROM THE PAPER'S FIGURE ARE WORTH KNOWING.
+%     1. every run is resampled onto the common epoch grid 0, GRIDSTEP, ... ;
+%     2. a run that has already ended is held at its final held-out MSE for
+%        the rest of the grid, because that is the model it finished with and
+%        the number it would be judged on at any later epoch;
+%     3. at each grid point the median is taken across the runs.
 %
-%   First, Le2015 plots "the best result over the grid search", so each of its
-%   curves is a single selected run. The bold line here is likewise the BEST
-%   run, matching that protocol. The median is drawn thin and dashed and the
-%   individual runs faint, so the spread stays visible and it is clear how
-%   many runs reached the bold line. Selecting on the best means reporting
-%   what a configuration can reach, not what it reaches typically.
+%   So the bold line is the median of 15 numbers at every epoch, not the
+%   trajectory of any single run, and it can follow a path no run took. Two
+%   consequences are worth reading off it: it flattens once more than half the
+%   runs have stopped, and it sits in the solved region only when more than
+%   half the runs solved -- where fewer than half did, it lies on the baseline
+%   and is reporting the failure rate rather than the achievable accuracy.
 %
-%   Second, the paper's y axis is linear from 0 to 0.8. That is kept in the
-%   main figure so the shapes are comparable, but a run that solves the task
+%   Holding an ended run at its last value rather than dropping it keeps the
+%   median over a fixed 15 runs at every epoch. Dropping them would shrink the
+%   sample as the grid advances and let the median drift simply because the
+%   slower runs are the only ones left.
+%
+%   THE TWO AXES. Le2015's y axis is linear from 0 to 0.8, kept in the main
+%   figure so the shapes are comparable. But a run that solves the task
 %   reaches 1e-7 and is indistinguishable from zero on a linear axis, so a
-%   second figure repeats the same data on a logarithmic axis.
+%   second figure repeats the same data on a logarithmic axis. Use that one.
 %
 %   Curves are resampled onto a grid of GRIDSTEP epochs, which should match
 %   the BLOCKEPOCHS the runs were recorded at; a finer grid interpolates
@@ -51,19 +62,15 @@ here = fileparts(mfilename('fullpath'));
 T = table();
 for folder = options.Folders
     part = load(fullfile(here, folder, 'results.mat'), 'result').result.table;
-    T = [T; part(:, {'sequenceLength', 'transferFcn', 'run', 'baselineMSE', ...
+    T = [T; part(:, {'sequenceLength', 'activationFcn', 'run', 'baselineMSE', ...
                      'curveEpoch', 'curveTestMSE'})]; %#ok<AGROW>
 end
 
 lengths = unique(T.sequenceLength).';
 series = ["poslin", "tansig"];
-labels = ["poslin + lag-1/lag-8 skip  (IRNN analogue)", ...
-          "tansig + Nguyen-Widrow"];
+labels = ["poslin", "tansig"];
 colours = [0.85 0.33 0.10; 0.29 0.23 0.65];
-for k = 1:2
-    labels(k) = labels(k) + sprintf('  [%d runs per T]', ...
-        sum(T.transferFcn == series(k)) / numel(lengths));
-end
+runsPerLength = sum(T.activationFcn == series(1)) / numel(lengths);
 
 for isLog = [false true]
     fig = figure('Color', 'w', 'Units', 'pixels', ...
@@ -80,7 +87,7 @@ for isLog = [false true]
         if isLog, set(ax, 'YScale', 'log'); end
 
         for k = 1:2
-            mask = T.transferFcn == series(k) & T.sequenceLength == lengths(index);
+            mask = T.activationFcn == series(k) & T.sequenceLength == lengths(index);
             if ~any(mask), continue; end
             block = resample(T(mask, :), options.GridStep);
             grid_ = 0:options.GridStep:(size(block, 2) - 1) * options.GridStep;
@@ -88,10 +95,7 @@ for isLog = [false true]
 
             plot(ax, grid_, block, '-', 'Color', [colours(k,:) 0.22], ...
                 'LineWidth', 0.7, 'HandleVisibility', 'off');
-            plot(ax, grid_, median(block, 1), '--', 'Color', colours(k,:), ...
-                'LineWidth', 1.0, 'HandleVisibility', 'off');
-            [~, best] = min(block(:, end));
-            plot(ax, grid_, block(best, :), '-', 'Color', colours(k,:), ...
+            plot(ax, grid_, median(block, 1), '-', 'Color', colours(k,:), ...
                 'LineWidth', 2.2, 'DisplayName', labels(k));
         end
 
@@ -102,17 +106,22 @@ for isLog = [false true]
         if isLog, ylim(ax, [options.LogFloor 1]); else, ylim(ax, [0 0.8]); end
         if index == 1
             ylabel(ax, 'held-out MSE of a^2(T)', 'Color', 'k');
-            lg = legend(ax, 'Location', 'northeast', 'Interpreter', 'none', ...
-                'FontSize', 8);
+            % The curves fall from the top left, so the free corner is the
+            % bottom left on the logarithmic axis and the top right on the
+            % linear one, where everything has already collapsed onto zero.
+            if isLog, corner = 'southwest'; else, corner = 'northeast'; end
+            lg = legend(ax, 'Location', corner, 'Interpreter', 'none', ...
+                'FontSize', 9);
             set(lg, 'TextColor', 'k', 'Color', 'w', 'EdgeColor', [0.6 0.6 0.6]);
         end
     end
 
     title(tiles, ['Adding two numbers in a sequence of T numbers, ', ...
         'closed-loop NARX'], 'Color', 'k');
-    subtitle(tiles, ['D = 8, S^1 = 2 (25 parameters), 5000 train / 5000 test, ', ...
-        'trainlm. Bold = best run, dashed = median, faint = individual runs, ', ...
-        'dotted = always predict the mean.'], 'Color', [0.25 0.25 0.25]);
+    subtitle(tiles, sprintf(['D = 8, S^1 = 2 (25 parameters), 5000 train / ' ...
+        '5000 test, trainlm, %d runs per length. Bold = pointwise median ' ...
+        'over runs, faint = individual runs, dotted = always predict the ' ...
+        'mean.'], runsPerLength), 'Color', [0.25 0.25 0.25]);
 
     if isLog, name = 'adding_fig2_log.png'; else, name = 'adding_fig2.png'; end
     target = fullfile(here, options.Folders(1), name);

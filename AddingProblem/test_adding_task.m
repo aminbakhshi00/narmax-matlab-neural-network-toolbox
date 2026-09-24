@@ -43,7 +43,7 @@ assert(d400 ~= d(7), 'the dataset seed does');
 ok('adding_seeds gives 5 weight draws x 3 datasets, weights independent of T');
 
 % ------------------------------------------------------------- the network --
-net = make_adding_narx('Example', ds.train, 'TransferFcn', "poslin");
+net = make_adding_narx('Example', ds.train, 'ActivationFcn', "poslin");
 assert(isequal(net.inputWeights{1,1}.delays, 0), 'no input TDL');
 assert(isequal(net.layerWeights{1,2}.delays, 1:8), 'feedback taps 1..8');
 assert(isequal(size(net.IW{1,1}), [2 2]));
@@ -69,10 +69,10 @@ assert(abs(max(abs(eig(A))) - 1) < 1e-9, 'spectral radius 1');
 assert(abs(polyval([1 -g], 1)) < 1e-12, 'z = 1 is a root of the loop polynomial');
 ok('loop vector g = [0.5 0 ... 0 0.5], sum(g) = 1, spectral radius 1, z = 1 a root');
 
-tn = make_adding_narx('Example', ds.train, 'TransferFcn', "tansig", 'Seed', 101);
+tn = make_adding_narx('Example', ds.train, 'ActivationFcn', "tansig", 'Seed', 101);
 assert(strcmp(tn.layers{1}.initFcn, 'initnw') && strcmp(tn.initFcn, 'initlay'));
 assert(any(tn.b{1} ~= 0), 'Nguyen-Widrow spreads the biases; ours would be zero');
-again = make_adding_narx('Example', ds.train, 'TransferFcn', "tansig", 'Seed', 101);
+again = make_adding_narx('Example', ds.train, 'ActivationFcn', "tansig", 'Seed', 101);
 assert(isequal(tn.IW{1,1}, again.IW{1,1}) && isequal(tn.b{1}, again.b{1}));
 ok('tansig keeps MATLAB''s Nguyen-Widrow default, reproducibly');
 
